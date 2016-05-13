@@ -39,7 +39,7 @@ struct cxcast {
 	int udp_fd;	/* for multicast join*/
 
 	__u32 vni;
-	char devname[IFNAMSIZ];
+	char dev[IFNAMSIZ];		/* tap interface name */
 	struct list_head mac_list;	/* MAC->SRC mapping table */
 };
 
@@ -53,8 +53,8 @@ struct mac_list {
 };
 
 void
-mac_list_add (struct cxcast *cxc, __u8 *mac, struct in_addr src_addr,
-	      struct in_addr mcast_addr)
+mac_list_add (struct cxcast *cxc, __u8 *mac, struct in_addr mcast_addr,
+	      struct in_addr src_addr)
 {
 	struct mac_list *mc;
 	struct sockaddr_in *saddr;
@@ -229,9 +229,91 @@ multicast_join (int fd, struct in_addr mcast_addr, char *link)
 	return 0;
 }
 
+int
+split_mac_mcast_src (char *arg, __u8 *mac_addr, struct in_addr *mcast_addr,
+		     struct in_addr *src_addr)
+{
+	/* arg = MAC_MCAST_SRC */
+
+	int len, n, ret;
+	char *p, *mac, *mcast, *src;
+	len = strlen (arg) + 1;
+
+	for (p = arg, mac = arg, mcast = NULL, src = NULL, n = 0;
+	     n < len; n++) {
+		if (*p == '_') {
+			if (mcast == NULL) 
+				mcast = p + 1;
+			else if (src == NULL)
+				src = p + 1;
+			*p = '\0';
+		}
+	}
+	
+	ret = inet_pton (AF_INET, mcast, &mcast_addr);
+	if (ret < 1) {
+		D ("failed to parse mcast addr from %s", optarg);
+		return -1;
+	}
+
+	ret = inet_pton (AF_INET, src, &src_addr);
+	if (ret < 1) {
+		D ("failed to parse source addr from %s", optarg);
+		return -1;
+	}
+
+	/* XXX: ascii to mac */
+	//ret = ll_addr_a2n (mac_addr, ETH_ALEN, mac);
+	if (ret < 0) {
+		D ("faield to parse mac addr from %s", optarg);
+		return -1;
+	}
+
+	return 0;
+}
+
+void
+usage (void)
+{
+	printf ("usage of cxcast\n"
+		"\t -i [IFNAME] : tap interface name\n"
+		"\t -v [VNI] : VNI for tap interface\n"
+		"\t -m MACADDR_MCASTADDR_SRCADDR : mac/mcast/source mapping\n"
+		"\n"
+		);
+}
 
 int
 main (int argc, char **argv)
 {
+	int ch, ret;
+	__u8 mac[ETH_ALEN];
+	struct in_addr mcast_addr, src_addr;
+	struct cxcast cxcast;
+	
+	memset (&cxcast, 0, sizeof (cxcast));
+	INIT_LIST_HEAD (&cxcast.mac_list);
+
+	while ((ch = getopt (argc, argv, "m:i:")) != -1) {
+		switch (ch) {
+		case 'm' :
+			D ("install MAC_MCAST_SRC entry %s", optarg);
+			ret = split_mac_mcast_src (optarg, mac,
+						   &mcast_addr, &src_addr);
+			if (ret < 0)
+				return -1;
+
+			mac_list_add (&cxcast, mac, mcast_addr, src_addr);
+			break;
+
+		case 'i':
+			strncpy (cxcast.dev, optarg, IFNAMSIZ);
+			break;
+
+		default:
+			usage ();
+		}
+	}
+
 	return 0;
 }
