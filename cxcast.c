@@ -7,6 +7,7 @@
 #include <string.h>
 #include <err.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/poll.h>
@@ -52,14 +53,35 @@ struct mac_list {
 struct cxcast {
 	int tap_fd;	/* to recv BUM packets from tap interface */
 	int raw_fd;	/* to send encaped BUM packet */
-	int udp_fd;	/* for multicast join*/
 
 	__u32 vni;
 	char dev[IFNAMSIZ];		/* tap interface name */
 	char *link;			/* underlay link interface name */
 	struct list_head mac_list;	/* MAC->SRC mapping table */
 	struct mac_list *bcast;		/* default mac entry */
+
+	int stop;	/* set to 1 when SIGINT is received */
 };
+
+struct cxcast cxcast;
+
+
+void
+cleanup (void)
+{
+	D ("close sockets");
+	close (cxcast.tap_fd);
+	close (cxcast.raw_fd);
+}
+
+void
+sig_cleanup (int siganl)
+{
+	cxcast.stop = 1;
+	cleanup ();
+	signal (SIGINT, SIG_DFL);
+}
+
 
 void
 mac_list_add (struct cxcast *cxc, __u8 *mac, struct in_addr mcast_addr,
@@ -186,91 +208,6 @@ raw_socket_create (char *link)
 	}
 
 	return fd;
-}
-
-int
-udp_socket_create (void)
-{
-	int fd;
-
-	if ((fd = socket (AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
-		D ("failed to create udp socket");
-		perror ("socket");
-		return -1;
-	}
-
-	return fd;
-}
-
-int
-getifaddr (char * dev, struct in_addr *ifaddr)
-{
-	int fd;
-	struct ifreq ifr;
-	struct sockaddr_in * addr;
-
-	fd = socket (AF_INET, SOCK_DGRAM, 0);
-
-	memset (&ifr, 0, sizeof (ifr));
-	strncpy (ifr.ifr_name, dev, IFNAMSIZ - 1);
-
-	if (ioctl (fd, SIOCGIFADDR, &ifr) < 0) {
-		D ("faield to get ifaddr for %s", dev);
-		return -1;
-	}
-
-	close (fd);
-
-	addr = (struct sockaddr_in *) &(ifr.ifr_addr);
-
-	*ifaddr = addr->sin_addr;
-
-	return 0;
-}
-
-int
-multicast_join (int fd, struct in_addr mcast_addr, char *link)
-{
-	struct ip_mreq mreq;
-
-	memset (&mreq, 0, sizeof (mreq));
-	mreq.imr_multiaddr = mcast_addr;
-	if (link)
-		getifaddr (link, &mreq.imr_interface);
-	
-	if (setsockopt (fd, IPPROTO_IP, IP_ADD_MEMBERSHIP,
-			&mreq, sizeof (mreq)) < 0) {
-		D ("faield to join \"%s\"", inet_ntoa (mcast_addr));
-		return -1;
-	}
-
-	if (link) {
-		if (setsockopt (fd, IPPROTO_IP, IP_MULTICAST_IF,
-				&mreq, sizeof (mreq)) < 0) {
-			D ("faield to set multicast interface %s for %s",
-			   link, inet_ntoa (mcast_addr));
-			return -1;
-		}
-	}
-
-	return 0;
-}
-
-void
-cxcast_multicast_join (struct cxcast *cxc)
-{
-	struct mac_list *mc;
-
-	if (cxc->bcast) {
-		mc = cxc->bcast;
-		D ("join multicast %s", inet_ntoa (mc->mcast_addr));
-		//multicast_join (cxc->udp_fd, mc->mcast_addr, cxc->link);
-	}
-
-	list_for_each_entry (mc, &cxc->mac_list, list) {
-		D ("join multicast %s", inet_ntoa (mc->mcast_addr));
-		multicast_join (cxc->udp_fd, mc->mcast_addr, cxc->link);
-	}
 }
 
 int
@@ -441,6 +378,9 @@ cxcast_thread (struct cxcast *cxc)
 		if (poll (x, 1, POLL_TIMEOUT) == 0)
 			continue;
 
+		if (cxc->stop)
+			break;
+
 		/* a packet is transmitted to tap interface */
 		len = read (cxc->tap_fd, buf, sizeof (buf));
 		if (len < 0) {
@@ -451,9 +391,8 @@ cxcast_thread (struct cxcast *cxc)
 		eth = (struct ethhdr *)buf;
 
 		/* is this multicast frame? (inidividual/group bit) */
-		if (eth->h_source[5] & 0x01)
+		if (eth->h_dest[0] & 0x01)
 			bum_encap_out (cxc, eth, len);
-
 	}
 
 	return;
@@ -465,7 +404,6 @@ main (int argc, char **argv)
 	int ch, ret;
 	__u8 mac[ETH_ALEN];
 	struct in_addr mcast_addr, src_addr;
-	struct cxcast cxcast;
 	
 	memset (&cxcast, 0, sizeof (cxcast));
 	INIT_LIST_HEAD (&cxcast.mac_list);
@@ -514,14 +452,14 @@ main (int argc, char **argv)
 	if (cxcast.raw_fd < 0)
 		return -1;
 
-	cxcast.udp_fd = udp_socket_create ();
-	if (cxcast.udp_fd < 0)
-		return -1;
+	D ("tap_fd:%d, raw_fd:%d", cxcast.tap_fd, cxcast.raw_fd);
 
-	D ("tap_fd:%d, raw_fd:%d, udp_fd:%d",
-	   cxcast.tap_fd, cxcast.raw_fd, cxcast.udp_fd);
+	if (atexit (cleanup) < 0) {
+		D ("failed to set up cleanup atext.");
+		perror ("atexit");
+	}
 
-	cxcast_multicast_join (&cxcast);
+	signal (SIGINT, sig_cleanup);
 
 	cxcast_thread (&cxcast);
 
