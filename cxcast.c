@@ -454,11 +454,6 @@ main (int argc, char **argv)
 
 	D ("tap_fd:%d, raw_fd:%d", cxcast.tap_fd, cxcast.raw_fd);
 
-	if (atexit (cleanup) < 0) {
-		D ("failed to set up cleanup atext.");
-		perror ("atexit");
-	}
-
 	signal (SIGINT, sig_cleanup);
 
 	cxcast_thread (&cxcast);
