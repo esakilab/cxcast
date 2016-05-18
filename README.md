@@ -2,7 +2,7 @@
 
 cxcast is a userland application to encapsulte BUM packets in specified VXLAN. It helps VXLAN devices that do not have Multicast based MAC/VTEP learning.
 
-To use it, `git clone https://github.com/upa/cxcast`, `cd cxcast` and `make`.
+How to use: `git clone https://github.com/upa/cxcast`, `cd cxcast` and `make`.
 
 cxcast creates a tap interface, and encapsulates BUM packets transmitted to the tap interface in specified VXLAN, UDP and IP headers.
 
@@ -13,7 +13,7 @@ cxcast creates a tap interface, and encapsulates BUM packets transmitted to the 
 	 	 -i [IFNAME] : underlay interface name (optional)
 	 	 -m MACADDR_MCASTADDR_SRCADDR : mac/mcast/source mapping
 
-One tap interface is one VNI. Source and Destination UDP port numbers are 4789. UDP checksum is 0. MACADDR of `-m` options means source MAC address of BUM packets. `ff:ff:ff:ff:ff:ff` matches all source MAC addresses (defualt entry). Multiple `-m` options are permitted. To encapsulates BUM packets of multiple segments, run multiple `cxcast` processes with different tap interface names at the same time.
+One tap interface is one VNI. Source and Destination UDP port numbers are 4789. UDP checksum is 0. MACADDR of `-m` option means source MAC address of BUM packets. `ff:ff:ff:ff:ff:ff` matches all source MAC addresses (defualt entry). Multiple `-m` options are permitted. To encapsulate BUM packets of multiple segments, run multiple cxcast processes with different tap interface names at the same time.
 
 	 % sudo ./cxcast -t vxlan10 -v 10 -m ff:ff:ff:ff:ff:ff_239.0.0.1_172.16.10.11 &
 	 main [414] install MAC_MCAST_SRC entry ff:ff:ff:ff:ff:ff_239.0.0.1_172.16.10.11
